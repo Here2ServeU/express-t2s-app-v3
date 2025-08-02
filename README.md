@@ -1,155 +1,195 @@
-# Express T2S App - ECR Deployment Guide (Beginner Friendly)
+# Express T2S App – Full DevOps Guide (Beginner Friendly)
 
-This project demonstrates how to push a Docker image of the Express Web App to AWS Elastic Container Registry (ECR) using three different methods: Bash Shell Script, Python Script, and Terraform.
+This project walks you through building and deploying a containerized Node.js Express application to AWS using real-world DevOps tools and best practices.
+
+## What You’ll Learn
+- How to containerize an app using Docker
+- How to push images to AWS Elastic Container Registry (ECR)
+- How to deploy Docker containers to AWS Elastic Container Service (ECS)
+- How to use Terraform to provision cloud infrastructure
+- How to manage infrastructure state using a remote S3 backend
+- How to automate workflows using Bash and Python scripts
 
 ---
 
-## Method 1: Bash Shell Script to Push Docker Image to AWS ECR
+## Project Structure
 
+express-t2s-app/
+- app/                           → Node.js Express application source code
+  - Dockerfile                   → Instructions to build Docker image
+  - index.js                     → Entry point (sample Express app)
+
+- scripts/                       → Bash and Python automation scripts
+  - push_ecr.sh                  → Push Docker image to ECR (Bash)
+  - push_ecr.py                  → Push Docker image to ECR (Python)
+  - deploy_ecs.sh                → Deploy Docker image to ECS (Bash)
+  - deploy_ecs.py                → Deploy Docker image to ECS (Python)
+
+- terraform/                     → Infrastructure-as-code using Terraform
+  - main.tf                      → Defines ECR, ECS cluster/service/task
+  - backend.tf                   → Remote S3 backend for state management
+  - variables.tf                 → Input variables for modularity
+  - terraform.tfvars             → Actual values for variables
+  - outputs.tf                   → Outputs like ECR repo URL and ECS ARNs
+
+---
+
+## Step-by-Step Guide for Beginners
+
+### 1. Provision Infrastructure Using Terraform
+
+#### Step 1. Configure Remote Backend (terraform/backend.tf)
+```
+terraform {
+  backend "s3" {
+    bucket = "your-terraform-backend-bucket"
+    key    = "state/ecs-ecr/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+```
+- This configuration sets up a remote backend so the Terraform state file is securely stored in an S3 bucket.
+
+#### Step 2. Initialize Terraform
+```bash
+cd terraform
+terraform init
+```
+- Initializes the working directory and configures the remote backend.
+
+#### Step 3. Preview Infrastructure Plan
+```bash
+terraform plan
+```
+- Allows you to review changes before applying.
+
+#### Step 4. Apply the Changes
+```bash
+terraform apply
+```
+- Provisions the entire infrastructure (ECR repo, ECS cluster, task definitions, etc.)
+
+---
+
+## Bash Script to Push Docker Image to ECR (scripts/push_ecr.sh)
 ```bash
 #!/bin/bash
-```
-- Declares this file is a Bash script.
+REPO_NAME=t2s-express-app                          # ECR repository name
+REGION=us-east-1                                   # AWS region
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text) # AWS account ID
+IMAGE_TAG=latest                                   # Docker image tag
 
-```bash
-REPO_NAME=t2s-express-app
-REGION=us-east-1
-```
-- Sets the repository name and AWS region as variables. You’ll use these multiple times later.
+# Log in to ECR using AWS CLI
+aws ecr get-login-password --region $REGION | \
+docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
 
-```bash
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-```
-- Retrieves your AWS account ID dynamically so you don’t need to hardcode it.
+# Create the repository if it doesn't exist
+aws ecr describe-repositories --repository-names $REPO_NAME --region $REGION > /dev/null 2>&1 || \
+aws ecr create-repository --repository-name $REPO_NAME --region $REGION
 
-```bash
-IMAGE_TAG=latest
-```
-- Tags the Docker image version as `latest`.
-
-```bash
-aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
-```
-- Authenticates your Docker client with AWS ECR using your credentials and region.
-
-```bash
-aws ecr describe-repositories --repository-names $REPO_NAME --region $REGION > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-  aws ecr create-repository --repository-name $REPO_NAME --region $REGION
-fi
-```
-- Checks if the ECR repository exists. If not, it creates it.
-
-```bash
-docker build -t $REPO_NAME .
+# Build, tag, and push Docker image to ECR
+docker build -t $REPO_NAME ../app
 docker tag $REPO_NAME:$IMAGE_TAG $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO_NAME:$IMAGE_TAG
 docker push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO_NAME:$IMAGE_TAG
 ```
-- Builds the Docker image, tags it, and pushes it to the ECR repository.
 
 ---
 
-## Method 2: Python Script to Push Docker Image to AWS ECR
-
+## Python Script to Push Docker Image to ECR (scripts/push_ecr.py)
 ```python
-import boto3
-import subprocess
-import os
-```
-- Imports libraries:
-  - `boto3`: AWS SDK for Python
-  - `subprocess`: Used to run shell commands
-  - `os`: For file system navigation
+import boto3, subprocess
 
-```python
-os.chdir("..")
-```
-- Moves up one directory — assumes your Dockerfile is in the parent folder.
+repo_name = "t2s-express-app"   # ECR repo name
+region = "us-east-1"            # AWS region
+image_tag = "latest"            # Image tag
 
-```python
-repo_name = "t2s-express-app"
-region = "us-east-1"
-image_tag = "latest"
-```
-- Sets your repository name, AWS region, and Docker image tag.
-
-```python
-ecr = boto3.client('ecr', region_name=region)
-sts = boto3.client('sts')
-```
-- Initializes clients to interact with AWS ECR and STS (to get account identity).
-
-```python
+ecr = boto3.client("ecr", region_name=region)
+sts = boto3.client("sts")
 account_id = sts.get_caller_identity()["Account"]
 repo_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo_name}"
-```
-- Builds the full URI of the ECR repository.
 
-```python
+# Check or create ECR repo
 try:
     ecr.describe_repositories(repositoryNames=[repo_name])
 except ecr.exceptions.RepositoryNotFoundException:
     ecr.create_repository(repositoryName=repo_name)
-```
-- Checks if the repository exists. If it doesn’t, the script creates it.
 
+# Docker login, build, tag, and push
+subprocess.run(f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {repo_uri}", shell=True)
+subprocess.run(f"docker build -t {repo_name} ../app", shell=True)
+subprocess.run(f"docker tag {repo_name}:{image_tag} {repo_uri}:{image_tag}", shell=True)
+subprocess.run(f"docker push {repo_uri}:{image_tag}", shell=True)
+```
+
+---
+
+## Bash Script to Deploy Image to ECS (scripts/deploy_ecs.sh)
+```bash
+#!/bin/bash
+CLUSTER_NAME=t2s-ecs-cluster       # ECS cluster name
+SERVICE_NAME=t2s-ecs-service       # ECS service name
+
+# Redeploy service with latest image
+aws ecs update-service \
+  --cluster $CLUSTER_NAME \
+  --service $SERVICE_NAME \
+  --force-new-deployment
+```
+
+---
+
+## Python Script to Deploy Image to ECS (scripts/deploy_ecs.py)
 ```python
-subprocess.run(f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {repo_uri}", shell=True, check=True)
-subprocess.run(f"docker build -t {repo_name} .", shell=True, check=True)
-subprocess.run(f"docker tag {repo_name}:{image_tag} {repo_uri}:{image_tag}", shell=True, check=True)
-subprocess.run(f"docker push {repo_uri}:{image_tag}", shell=True, check=True)
+import boto3
+
+client = boto3.client('ecs')
+
+# Redeploy service with latest image
+client.update_service(
+    cluster='t2s-ecs-cluster',
+    service='t2s-ecs-service',
+    forceNewDeployment=True
+)
 ```
-- Logs in to ECR, builds the Docker image, tags it, and pushes it.
 
 ---
 
-## Method 3: Terraform Scripts to Create ECR Repository
-
-### main.tf
-
-```hcl
-provider "aws" {
-  region = var.region
-}
-
-resource "aws_ecr_repository" "app" {
-  name         = var.repo_name
-  force_delete = true
-}
-```
-- Configures AWS provider and creates an ECR repository with `force_delete = true` to allow deletion even if images exist.
-
-### variables.tf
-
-```hcl
-variable "region" {
-  description = "AWS region"
-}
-
-variable "repo_name" {
-  description = "Repository name"
-}
-```
-- Declares input variables.
-
-### terraform.tfvars
-
-```hcl
-region    = "us-east-1"
-repo_name = "t2s-express-app"
-```
-- Sets the actual values for the declared variables.
-
-### outputs.tf (optional)
-
-```hcl
-output "ecr_repo_url" {
-  value       = aws_ecr_repository.app.repository_url
-  description = "URL of the created ECR repository"
-}
-```
-- Outputs the ECR repo URL when provisioning is complete.
+## Summary of Terraform Files
+- `main.tf`: Declares resources like ECS cluster, service, task definition, IAM roles, and ECR.
+- `variables.tf`: Defines reusable input variables.
+- `terraform.tfvars`: Actual values used in the variables.
+- `outputs.tf`: Displays useful output like ECR repo URI or ECS service name.
+- `backend.tf`: Defines remote S3 backend for storing Terraform state.
 
 ---
 
-This guide is part of a beginner-friendly Express Web App DevOps project. See full project: https://github.com/Here2ServeU/express-t2s-app-v2
+## How to Run
+```bash
+# Terraform infra
+cd terraform
+terraform init
+terraform apply
+
+# Push Docker image (option 1)
+cd scripts
+bash push_ecr.sh
+
+# Push Docker image (option 2)
+python3 push_ecr.py
+
+# Deploy to ECS (option 1)
+bash deploy_ecs.sh
+
+# Deploy to ECS (option 2)
+python3 deploy_ecs.py
+```
+
+---
+## Author
+
+**Dr. Emmanuel Naweji (2025)**  
+Cloud | DevOps | SRE | FinOps | AI Mentor  
+GitHub: [Here2ServeU](https://github.com/Here2ServeU)
+LinkedIn: [emmanuelnaweji](https://www.linkedin.com/in/ready2assist/) 
+Medium: [@here2serveyou](https://medium.com/@here2serveyou)  
+Book a Free 30-Minute Consultation: [naweji.setmore.com](https://here4you.setmore.com/emmanuel)
